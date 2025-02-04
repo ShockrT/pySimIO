@@ -1,0 +1,3 @@
+,__dict__,__doc__,__firstlineno__,__init__,__module__,__static_attributes__,__weakref__,print_properties
+0,<attribute '__dict__' of 'ProcessVariable' objects>,,1,<function ProcessVariable.__init__ at 0x00000222B33B2A20>,data,"('EUMax', 'EUMin', 'Name', 'Value', 'cvRelationship', 'cvTag')",<attribute '__weakref__' of 'ProcessVariable' objects>,<function ProcessVariable.print_properties at 0x00000222B33B2AC0>
+1,<attribute '__dict__' of 'ProcessVariable' objects>,,1,<function ProcessVariable.__init__ at 0x00000222B33B2A20>,data,"('EUMax', 'EUMin', 'Name', 'Value', 'cvRelationship', 'cvTag')",<attribute '__weakref__' of 'ProcessVariable' objects>,<function ProcessVariable.print_properties at 0x00000222B33B2AC0>
