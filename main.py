@@ -9,41 +9,36 @@
 # 6) Creates a simulated output PV value based on the simulation model's "compute_value" function using
 #    data from Steps #1-5
 # 7) Saves data from previous steps to "metadata.csv"
-import atexit
 
+#from pycomm3 import LogixDriver
 from opcinterface import OPCUAInterface
 from simulator import PLCSimulator
 from userinterface import GUI
 import pandas
-from data import Data
+from data import PLCData
 
 PLC_PATH = "DS3::[CAUSTIC]"
 ANALOG_INPUT_FILE = "AnalogInputs.csv"
 opc_server_url = "opc.tcp://azrnadwapp1dd94:4990/FactoryTalkLinxGateway1"  # Change this to match your PLC's OPC UA server
+#CAUSTIC_PLC_PATH = "172.30.71.16/2"
+TAG_LIST_FILE = "CAUSTIC_31Jan2025_Tags.CSV"
 
-opc_interface = OPCUAInterface(opc_server_url)
-opc_interface.connect()
-plc_sim = PLCSimulator(opc_interface)
-data = Data()
-#gui = GUI(opc_interface, plc_sim)
-#gui.run()
-
-# Get list of Process Variables from csv
+plc_data = PLCData()
+# Extract PlantPAx Modules from csv
 try:
-    raw_data = pandas.read_csv(ANALOG_INPUT_FILE).to_dict(orient="records")
+    tag_list = pandas.read_csv(TAG_LIST_FILE).to_dict(orient="records")
 except FileNotFoundError:
     print("File Not Found")
 else:
-    # Data scrub function will create a list of PVs with the required information (CV Tag and relationship)
-    data.data_scrub(input_data=raw_data)
+    plc_data.get_plant_pax_modules(tag_list)
 
-plc_sim.simulate(data.pvList)
+opc_interface = OPCUAInterface(opc_server_url)
+#opc_interface.connect()
+plc_sim = PLCSimulator(opc_interface)
+gui = GUI(opc_interface, plc_sim, plc_data)
+gui.run()
 
-#output_df = pandas.DataFrame(vars(ProcessVariable) for pv in data.pvList) #Write tag data to output DataFrame
-#output_df.to_csv("metadata.csv") #Write tag data to csv
+#plc_sim.simulate(data.pvList)
 
 
-
-opc_interface.disconnect()
-
-atexit.register(opc_interface.disconnect)
+#opc_interface.disconnect()
