@@ -37,8 +37,8 @@ class SimulationModel:
     def compute_value(self) -> float:
         # Read the current values for the PV, CV, and EUMin/Max from the PLC
         cv_value = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.cvTag}") or 0.0
-        pv_eu_min = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.name}.Cfg_PVEUMin")
-        pv_eu_max = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.name}.Cfg_PVEUMax")
+        pv_eu_min = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.name}.Cfg_PVEUMin") or 0.0
+        pv_eu_max = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.name}.Cfg_PVEUMax") or 100.0
         pv_value = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.name}.Val")
 
         # Convert the pv value into a percentage of its range

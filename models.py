@@ -1,15 +1,32 @@
 from pySimIO.data import ProcessVariable
 from pySimIO.data import FlowPath
 
-
-class Flow:
-    model_id = 1
+class PVModel:
+    model_id = None
     def __init__(self):
         self.conditions = {
-            "has cv": False,
-            }
+            "has_cv": False,
+        }
         self.is_configured = False
-        self.flow_path = FlowPath
+        self.flow_path = FlowPath()
+
+    def check_config(self, pv: ProcessVariable):
+        if pv.cvTag == "":
+            self.conditions["has_cv"] = False
+        else:
+            self.conditions["has_cv"] = True
+        # If any condition is false, the model is not configured
+        for condition in self.conditions.values():
+            if not condition:
+                self.is_configured = False
+                return
+        self.is_configured = True
+
+class Flow(PVModel):
+    flow_path = FlowPath
+    model_id = 1
+    def __init__(self):
+        super().__init__()
 
     def check_config(self, pv: ProcessVariable):
         if pv.cvTag == "":
