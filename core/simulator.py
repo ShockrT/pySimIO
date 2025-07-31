@@ -4,7 +4,7 @@
 #
 
 import time
-from data import ProcessVariable
+from core.data import ProcessVariable
 
 PLC_PATH = "DS3::[CAUSTIC]"
 

@@ -1,5 +1,5 @@
-from pySimIO.data import ProcessVariable
-from pySimIO.data import FlowPath
+from data import ProcessVariable
+from data import FlowPath
 
 class PVModel:
     model_id = None
