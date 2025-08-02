@@ -36,7 +36,7 @@ class SimulationModel:
 
     def compute_value(self) -> float:
         # Read the current values for the PV, CV, and EUMin/Max from the PLC
-        cv_value = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.cvTag}") or 0.0
+        cv_value = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.cv[0].name}") or 0.0
         pv_eu_min = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.name}.Cfg_PVEUMin") or 0.0
         pv_eu_max = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.name}.Cfg_PVEUMax") or 100.0
         pv_value = self.opc_interface.read_tag(f"{PLC_PATH}{self.pv.name}.Val")
@@ -45,10 +45,10 @@ class SimulationModel:
         pv_value_as_percent = pv_value * (100 / (pv_eu_max - pv_eu_min))
 
         # If the PV's relationship to the CV is direct, the PV should increase when the CV increases
-        if self.pv.cvRelationship == "direct":
-            sim_value_as_percent = pv_value_as_percent + (cv_value - pv_value_as_percent) * self.pv.simRate
+        if self.pv.cv_relationship == "direct":
+            sim_value_as_percent = pv_value_as_percent + (cv_value - pv_value_as_percent) * self.pv.sim_rate
         else:
-            sim_value_as_percent = pv_value_as_percent - (cv_value - pv_value_as_percent) * self.pv.simRate
+            sim_value_as_percent = pv_value_as_percent - (cv_value - pv_value_as_percent) * self.pv.sim_rate
         # Convert simulated value back to E.U.
         sim_value = sim_value_as_percent * (pv_eu_max - pv_eu_min) / 100 + pv_eu_min
         return sim_value

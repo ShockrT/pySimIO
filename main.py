@@ -10,15 +10,18 @@
 #    data from Steps #1-5
 # 7) Saves data from previous steps to "metadata.csv"
 import sys
-
+import logging
 from PyQt6.QtWidgets import QApplication
 
 #from pycomm3 import LogixDriver
-from core.opcinterface import OPCUAInterface
+from core.opc_interface import OPCUAInterface
 from core.simulator import PLCSimulator
-from gui.mainwindow import MainWindow
+from gui.main_window import MainWindow
 import pandas
 from core.data import PLCData
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 PLC_PATH = "DS3::[CAUSTIC]"
 ANALOG_INPUT_FILE = "assets/AnalogInputs.csv"
@@ -31,7 +34,7 @@ plc_data = PLCData()
 try:
     tag_list = pandas.read_csv(TAG_LIST_FILE).to_dict(orient="records")
 except FileNotFoundError:
-    print("File Not Found")
+    logger.error("File Not Found")
 else:
     plc_data.get_plant_pax_modules(tag_list)
 
@@ -46,9 +49,6 @@ window = MainWindow(opc_interface, plc_sim, plc_data)
 window.show()
 
 sys.exit(app.exec())
-
-#gui = GUI(opc_interface, plc_sim, plc_data)
-#gui.run()
 
 #plc_sim.simulate(data.pvList)
 

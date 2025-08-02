@@ -1,3 +1,4 @@
+from json import JSONDecodeError
 from PyQt6 import QtWidgets
 from PyQt6.QtCore import pyqtSignal
 from core.data import FlowPath, Valve
@@ -51,12 +52,12 @@ class FlowPathConfigWizard(QtWidgets.QDialog):
         serialized = { fp.name: fp.serialize_fp() }
         self.plc.flow_paths.append(fp)
         try:
-            with open("../assets/flowpaths.json") as f:
+            with open("./assets/flowpaths.json") as f:
                 data = json.load(f)
-        except FileNotFoundError:
+        except (FileNotFoundError, JSONDecodeError):
             data = {}
         data.update(serialized)
-        with open("../assets/flowpaths.json", "w") as f:
+        with open("./assets/flowpaths.json", "w") as f:
             json.dump(data, f, indent=4)
         self.flow_path_saved.emit(name)
         self.accept()

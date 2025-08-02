@@ -1,71 +1,43 @@
-from data import ProcessVariable
-from data import FlowPath
+from dataclasses import dataclass, field
+from typing import Dict
+from core.data import ProcessVariable, FlowPath
 
+@dataclass
 class PVModel:
-    model_id = None
-    def __init__(self):
-        self.conditions = {
-            "has_cv": False,
-        }
-        self.is_configured = False
-        self.flow_path = FlowPath()
+    model_id: int = -1
+    flow_path: FlowPath = field(default_factory=FlowPath)
+    conditions: Dict[str, bool] = field(default_factory=lambda: {"has cv": False})
+    is_configured: bool = False
 
     def check_config(self, pv: ProcessVariable):
-        if pv.cvTag == "":
-            self.conditions["has_cv"] = False
-        else:
-            self.conditions["has_cv"] = True
-        # If any condition is false, the model is not configured
-        for condition in self.conditions.values():
-            if not condition:
-                self.is_configured = False
-                return
-        self.is_configured = True
-
-class Flow(PVModel):
-    flow_path = FlowPath
-    model_id = 1
-    def __init__(self):
-        super().__init__()
-
-    def check_config(self, pv: ProcessVariable):
-        if pv.cvTag == "":
+        if len(pv.cv) == 0:
             self.conditions["has cv"] = False
         else:
             self.conditions["has cv"] = True
-        # If any condition is false, the model is not configured
-        for condition in self.conditions.values():
-            if not condition:
-                self.is_configured = False
-                return
-        self.is_configured = True
+        self.is_configured = all(self.conditions.values())
+
+@dataclass
+class Flow(PVModel):
+    model_id: int = 1
+
+    def __post_init__(self):
+        super().check_config = self.check_config  # inherit config logic
+
+@dataclass
+class Pressure(PVModel):
+    model_id: int = 2
+
+    def __post_init__(self):
+        super().check_config = self.check_config # inherit config logic
 
 
-class Pressure:
-    model_id = 2
-    def __init__(self):
+class Temperature(PVModel):
+    model_id = 3
+
+    def __post_init__(self):
+        super().check_config = self.check_config # inherit config logic
         self.conditions = {
             "has cv": False,
-        }
-        self.is_configured = False
-
-    def check_config(self, pv: ProcessVariable):
-        if pv.cvTag == "":
-            self.conditions["has cv"] = False
-        else:
-            self.conditions["has cv"] = True
-        # If any condition is false, the model is not configured
-        for condition in self.conditions.values():
-            if not condition:
-                self.is_configured = False
-                return
-        self.is_configured = True
-
-
-class Temperature:
-    model_id = 3
-    def __init__(self):
-        self.conditions = {
             "heat path open": False,
             "cool path open": False,
         }
@@ -74,12 +46,14 @@ class Temperature:
         self.heat_rate = 0.0
         self.cool_rate = 0.0
 
-class Level:
+class Level(PVModel):
     model_id = 4
-    def __init__(self):
+
+    def __post_init__(self):
+        super().check_config = self.check_config # inherit config logic
         self.conditions = {
-            "inlet_path_open": False,
-            "outlet_path_open": False,
+            "has inlet path": False,
+            "has outlet path": False,
         }
         self.inlet_paths = [FlowPath]
         self.outlet_paths = [FlowPath]
