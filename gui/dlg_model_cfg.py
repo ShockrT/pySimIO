@@ -5,7 +5,6 @@ from core.constants import MODEL_TYPES
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QDialog, QScrollArea, QFormLayout, QPushButton, \
     QComboBox, QGroupBox, QHBoxLayout, QLineEdit
 
-
 class ModelConfigWizard(QDialog):
     def __init__(self, plc, pv):
         super().__init__()
@@ -44,7 +43,11 @@ class ModelConfigWizard(QDialog):
         self.flow_layout = QVBoxLayout()
         self.flow_group.setLayout(self.flow_layout)
         self.add_flow_cv_btn = QPushButton("Add Control Variable")
-        self.add_flow_cv_btn.clicked.connect(self._add_flow_cv_row) # type: ignore
+        self.add_flow_cv_btn.clicked.connect(
+            lambda: self._add_cv_row(
+                self.flow_layout,
+                self.flow_cv_rows,
+                self._remove_flow_cv_row))
         self.flow_layout.addWidget(self.add_flow_cv_btn)
         form_layout.addRow(self.flow_group)
         form_layout.addWidget(self.create_fp_btn_flow)
@@ -57,7 +60,11 @@ class ModelConfigWizard(QDialog):
         self.pressure_group.setLayout(self.pressure_layout)
         self.pressure_group.hide()
         self.add_pressure_cv_btn = QPushButton("Add Control Variable")
-        self.add_pressure_cv_btn.clicked.connect(self._add_pressure_cv_row) # type: ignore
+        self.add_pressure_cv_btn.clicked.connect(
+            lambda: self._add_cv_row(
+                self.pressure_layout,
+                self.pressure_cv_rows,
+                self._remove_pressure_cv_row))
         self.add_pressure_cv_btn.hide()
         self.pressure_layout.addWidget(self.add_pressure_cv_btn)
         self.press_inlet_path_label = QLabel("Inlet Flow Path:")
@@ -76,13 +83,21 @@ class ModelConfigWizard(QDialog):
         self.heat_layout = QVBoxLayout()
         self.heat_group.setLayout(self.heat_layout)
         self.add_heat_cv_btn = QPushButton("Add Heat CV")
-        self.add_heat_cv_btn.clicked.connect(self._add_heat_cv_row) # type: ignore
+        self.add_heat_cv_btn.clicked.connect(
+            lambda: self._add_cv_row(
+                self.heat_layout,
+                self.heat_cv_rows,
+                self._remove_heat_cv_row))
         self.heat_layout.addWidget(self.add_heat_cv_btn)
         self.cool_group = QGroupBox("Cool Control Variables")
         self.cool_layout = QVBoxLayout()
         self.cool_group.setLayout(self.cool_layout)
         self.add_cool_cv_btn = QPushButton("Add Cool CV")
-        self.add_cool_cv_btn.clicked.connect(self._add_cool_cv_row) # type: ignore
+        self.add_cool_cv_btn.clicked.connect(
+            lambda: self._add_cv_row(
+                self.cool_layout,
+                self.cool_cv_rows,
+                self._remove_cool_cv_row))
         self.cool_layout.addWidget(self.add_cool_cv_btn)
         self.heat_path_label = QLabel("Heating Flow Path:")
         self.heat_path_combo = QComboBox()
@@ -205,7 +220,6 @@ class ModelConfigWizard(QDialog):
             self.create_fp_btn_flow.clicked.connect(self.create_new_flow_path)  # type: ignore
             self.fp_combo.addItems(self.get_flow_path_names())
             self.fp_combo.currentTextChanged.connect(self.on_flow_path_select) # type: ignore
-            #self._add_flow_cv_row()
             self.show_dynamic_fields()
         elif self.pv.model_type == "Pressure":
             try:
@@ -245,88 +259,18 @@ class ModelConfigWizard(QDialog):
         else:
             pass
 
-    def _add_flow_cv_row(self, prefill=None):
-        row_widget = QWidget()
-        layout = QHBoxLayout()
-        row_widget.setLayout(layout)
-
-        control_combo = QComboBox()
-        gain_input = QLineEdit()
-        gain_input.setPlaceholderText("Gain")
-        gain_input.setFixedWidth(60)
-
-        remove_btn = QPushButton("×")
-        remove_btn.setFixedWidth(24)
-        remove_btn.clicked.connect(lambda: self._remove_flow_cv_row(row_widget)) # type: ignore
-
-        # Populate combo with control variables
-        for var in self.plc.cv_list:
-            control_combo.addItem(var.name)
-
-        layout.addWidget(control_combo)
-        layout.addWidget(gain_input)
-        layout.addWidget(remove_btn)
-
-        self.flow_layout.insertWidget(self.flow_layout.count() - 1, row_widget)
-        self.flow_cv_rows.append({
-            "widget": row_widget,
-            "control_combo": control_combo,
-            "gain_input": gain_input
-        })
-        if prefill:
-            control_combo.setCurrentText(prefill.get("control_variable", ""))
-            gain_input.setText(str(prefill.get("gain", 0)))
-
     def _remove_flow_cv_row(self, widget):
         self.flow_cv_rows = [r for r in self.flow_cv_rows if r["widget"] != widget]
         widget.setParent(None)
         widget.deleteLater()
-
-    def _add_pressure_cv_row(self, prefill=None):
-        row_widget = QWidget()
-        layout = QHBoxLayout()
-        row_widget.setLayout(layout)
-
-        control_combo = QComboBox()
-        gain_input = QLineEdit()
-        gain_input.setPlaceholderText("Gain")
-        gain_input.setFixedWidth(60)
-
-        remove_btn = QPushButton("×")
-        remove_btn.setFixedWidth(24)
-        remove_btn.clicked.connect(lambda: self._remove_pressure_cv_row(row_widget)) # type: ignore
-
-        # Populate combo with available control variables
-        for cv in self.plc.cv_list:
-            control_combo.addItem(cv.name)
-
-        layout.addWidget(control_combo)
-        layout.addWidget(gain_input)
-        layout.addWidget(remove_btn)
-
-        self.pressure_layout.insertWidget(self.pressure_layout.count() - 1, row_widget)
-        self.pressure_cv_rows.append({
-            "widget": row_widget,
-            "control_combo": control_combo,
-            "gain_input": gain_input
-        })
-        if prefill:
-            control_combo.setCurrentText(prefill.get("control_variable", ""))
-            gain_input.setText(str(prefill.get("gain", 0)))
 
     def _remove_pressure_cv_row(self, widget):
         self.pressure_cv_rows = [r for r in self.pressure_cv_rows if r["widget"] != widget]
         widget.setParent(None)
         widget.deleteLater()
 
-    def _add_heat_cv_row(self, prefill=None):
-        self._add_cv_row(self.heat_layout, self.heat_cv_rows, self._remove_heat_cv_row, prefill)
-
     def _remove_heat_cv_row(self, widget):
         self._remove_cv_row(widget, self.heat_cv_rows)
-
-    def _add_cool_cv_row(self, prefill=None):
-        self._add_cv_row(self.cool_layout, self.cool_cv_rows, self._remove_cool_cv_row, prefill)
 
     def _remove_cool_cv_row(self, widget):
         self._remove_cv_row(widget, self.cool_cv_rows)
@@ -337,31 +281,49 @@ class ModelConfigWizard(QDialog):
         row_widget.setLayout(row_layout)
 
         control_combo = QComboBox()
+        control_combo.setEditable(True)  # <-- allow free-typing when offline / empty
         gain_input = QLineEdit()
         gain_input.setPlaceholderText("Gain")
         gain_input.setFixedWidth(60)
+        gain_input.setToolTip("Gain")
+
+        relationship_combo = QComboBox()
+        relationship_combo.addItems(["Direct", "Reverse"])
+        relationship_combo.setFixedWidth(80)
 
         remove_btn = QPushButton("×")
         remove_btn.setFixedWidth(24)
         remove_btn.clicked.connect(lambda: remove_callback(row_widget)) # type: ignore
 
-        for var in self.plc.cv_list:
-            control_combo.addItem(var.name)
+        # Safe: fall back to empty list if attribute not present
+        cv_items = list(getattr(self.plc, "cv_list", []) or [])
+        # Optional: de-dupe / sort for nicer UX
+        cv_items = sorted(set(cv_items), key=str.lower)
+
+        # Populate if we have anything
+        if cv_items:
+            control_combo.addItems(cv_items)
+        else:
+            # Helpful placeholder when offline
+            control_combo.setPlaceholderText("Type a control variable (offline)")
+        # Prefill values if present
+        if prefill:
+            control_combo.setCurrentText(prefill.get("control_variable", ""))
+            gain_input.setText(str(prefill.get("gain", 0)))
+            relationship_combo.setCurrentText(prefill.get("cv_relationship", "Direct").capitalize())
 
         row_layout.addWidget(control_combo)
         row_layout.addWidget(gain_input)
+        row_layout.addWidget(relationship_combo)
         row_layout.addWidget(remove_btn)
 
         layout.insertWidget(layout.count() - 1, row_widget)
         row_list.append({
             "widget": row_widget,
             "control_combo": control_combo,
-            "gain_input": gain_input
+            "gain_input": gain_input,
+            "relationship_combo": relationship_combo
         })
-
-        if prefill:
-            control_combo.setCurrentText(prefill.get("control_variable", ""))
-            gain_input.setText(str(prefill.get("gain", 0)))
 
     def _remove_cv_row(self, widget, row_list):
         row_list[:] = [r for r in row_list if r["widget"] != widget]
@@ -390,6 +352,7 @@ class ModelConfigWizard(QDialog):
         gain_input = QLineEdit()
         gain_input.setPlaceholderText("1.0")
         gain_input.setFixedWidth(60)
+        gain_input.setToolTip("Gain")
 
         control_combo = QComboBox()
         control_combo.setPlaceholderText("Control Variable")
@@ -431,7 +394,6 @@ class ModelConfigWizard(QDialog):
         dlg.flow_path_saved.connect(self.on_new_flow_path_created)  # connect signal
         dlg.exec()
 
-    # TODO #1) Add model save to file functionality
     def save_model(self):
         print("Saving...")
         try:
@@ -495,9 +457,11 @@ class ModelConfigWizard(QDialog):
                 gain = float(row["gain_input"].text())
             except ValueError:
                 gain = 1.0
+            relationship = row["relationship_combo"].currentText().lower()  # "direct" or "reverse"
             results.append({
                 "control_variable": control_var,
-                "gain": gain
+                "gain": gain,
+                "cv_relationship": relationship
             })
         return results
 
@@ -537,13 +501,13 @@ class ModelConfigWizard(QDialog):
         if model_type == "Flow":
             self.fp_combo.setCurrentText(config.get("flow_path", ""))
             for entry in config.get("control_variables", []):
-                self._add_flow_cv_row(prefill=entry)
+                self._add_cv_row(self.flow_layout, self.flow_cv_rows, self._remove_flow_cv_row, entry)
 
         elif model_type == "Pressure":
             self.press_inlet_path_combo.setCurrentText(config.get("inlet_flow_path", ""))
             self.press_outlet_path_combo.setCurrentText(config.get("outlet_flow_path", ""))
             for entry in config.get("control_variables", []):
-                self._add_pressure_cv_row(prefill=entry)
+                self._add_cv_row(self.pressure_layout, self.pressure_cv_rows, self._remove_pressure_cv_row, entry)
 
         elif model_type == "Temperature":
             self.heat_path_combo.setCurrentText(config.get("heating_flow_path", ""))

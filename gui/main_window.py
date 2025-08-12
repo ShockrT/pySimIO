@@ -1,145 +1,476 @@
-from functools import partial
+# gui/main_window.py
+import json
+from json import JSONDecodeError
+from pathlib import Path
+
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import QTabWidget, QWidget, QVBoxLayout, QLabel, QDialog, QMainWindow, QHBoxLayout, QScrollArea, \
-    QCheckBox, QPushButton
-from gui.dlg_model_cfg import ModelConfigWizard
+from PyQt6.QtWidgets import (
+    QMainWindow, QTabWidget, QWidget, QVBoxLayout, QLabel, QHBoxLayout,
+    QScrollArea, QCheckBox, QPushButton, QFrame, QMessageBox, QFileDialog
+)
+
+from core.model_loader import ModelLoader
+from core.models import ConfiguredModel
 from core.constants import COLUMN_HEADINGS, COLUMN_WIDTHS
+from core.sim_component_factory import build_sim_component
+from core.simulator import SimComponent, PressureComponent, LevelComponent
+from core.plc_sim_bridge import PlcSimBridge
+from gui.dlg_flowpath_cfg import FlowPathConfigWizard
+from gui.dlg_model_cfg import ModelConfigWizard
+
+from core.csv_io import (
+    export_models_csv, import_models_csv,
+    export_flowpaths_csv, import_flowpaths_csv
+)
 
 class MainWindow(QMainWindow):
-    def __init__(self, opc_interface, plc_simulator, plc):
-        super().__init__()
-        # Create the OPC interface and simulator instances
-        self.opc_interface = opc_interface
-        self.plc_simulator = plc_simulator
-
-        self.plc = plc
-        self.pv_list = plc.pv_list
+    def __init__(self, plc=None, parent=None):
+        super().__init__(parent)
         self.setWindowTitle("pySIMIO")
-        self.resize(800, 600)
+        self._plc = plc
 
-        # Create the menu bar with all top-level menus
-        self._create_menu_bar()
+        # data
+        self.models: list[ConfiguredModel] = ModelLoader.load()
+        self.components: dict[str, SimComponent] = {}
+        self.active_only: dict[str, SimComponent] = {}
+        self.value_labels: dict[str, QLabel] = {}
+        self.timer = QTimer(self)
+        self.timer.setInterval(200)
+        self.timer.timeout.connect(self._tick)
 
-        # Create the tabbed layout and place widgets into their respective tabs
-        self._create_tabs()
+        # plc bridge
+        self.bridge = PlcSimBridge(write_fn=(self._plc.write_tag if self._plc else lambda t,v: True))
 
-    def _create_menu_bar(self):
-        menu_bar = self.menuBar()
+        # UI
+        self.tabs = QTabWidget(self)
+        self.setCentralWidget(self.tabs)
+        self._build_process_tab()
+        self._build_flowpaths_tab()
+        self._build_menu()
+
+        self._refresh_pv_tab()
+        self._rebuild()
+
+    # -------- UI build --------
+
+    def _build_menu(self):
+        bar = self.menuBar()
 
         # File Menu
-        file_menu = menu_bar.addMenu("File")
-        file_menu.addAction(QAction("Open", self))
-        file_menu.addAction(QAction("Save", self))
+        file_menu = bar.addMenu("&File")
+        act_export_models = file_menu.addAction("Export &Models (CSV)")
+        act_export_models.triggered.connect(self.on_export_models_csv)
+        act_import_models = file_menu.addAction("Import &Models (CSV)")
+        act_import_models.triggered.connect(self.on_import_models_csv)
         file_menu.addSeparator()
-        exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close) # type: ignore
-        file_menu.addAction(exit_action)
+        act_export_flow = file_menu.addAction("Export &Flow Paths (CSV)")
+        act_export_flow.triggered.connect(self.on_export_flowpaths_csv)
+        act_import_flow = file_menu.addAction("Import F&low Paths (CSV)")
+        act_import_flow.triggered.connect(self.on_import_flowpaths_csv)
 
-        # Edit Menu
-        edit_menu = menu_bar.addMenu("Edit")
-        edit_menu.addAction(QAction("Undo", self))
-        edit_menu.addAction(QAction("Redo", self))
+        # Simulation Menu
+        sim_menu = bar.addMenu("&Simulation")
+        act_start = QAction("Start", self); act_start.triggered.connect(self.on_start)
+        act_stop = QAction("Stop", self); act_stop.triggered.connect(self.on_stop)
+        sim_menu.addAction(act_start); sim_menu.addAction(act_stop)
 
-        # Connections Menu
-        connections_menu = menu_bar.addMenu("Connections")
-        connect_action = QAction("Connect", self)
-        connect_action.triggered.connect(self.show_plc_connection_dialog) # type: ignore
-        connections_menu.addAction(connect_action)
-        #connections_menu.addAction(QAction("Refresh", self))
+        # Configuration Menu
+        cfg_menu = bar.addMenu("&Configure")
+        act_cfg_pv = QAction("Add/Edit Model...", self); act_cfg_pv.triggered.connect(self.on_configure_model)
+        act_cfg_fp = QAction("Flow Paths...", self); act_cfg_fp.triggered.connect(self.on_configure_flow_paths)
+        cfg_menu.addAction(act_cfg_pv); cfg_menu.addAction(act_cfg_fp)
 
-        # Help Menu
-        help_menu = menu_bar.addMenu("Help")
-        help_menu.addAction(QAction("About", self))
+    def _build_process_tab(self):
+        tab = QWidget(); self.tabs.addTab(tab, "Process Variables")
+        v = QVBoxLayout(tab)
 
-    def _create_tabs(self):
-        # Create the tab widget that holds all tab pages
-        self.tab_widget = QTabWidget()
-
-        # Add three tabs: Process Variables, Flow Paths, Equipment
-        self.tab_widget.addTab(self._build_process_variables_tab(), "Process Variables")
-        self.tab_widget.addTab(self._build_flow_paths_tab(), "Flow Paths")
-        self.tab_widget.addTab(self._build_equipment_tab(), "Equipment")
-
-        # Set the QTabWidget as the central widget of the main window
-        self.setCentralWidget(self.tab_widget)
-
-    def _build_process_variables_tab(self):
-        # Create the main container widget for the tab
-        tab = QWidget()
-        central = QWidget()
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-
-        # Create the header for the tab
         header = QHBoxLayout()
-        for heading, width in zip(COLUMN_HEADINGS, COLUMN_WIDTHS):
-            lbl = QLabel(heading)
-            lbl.setFixedWidth(width)
-            lbl.setStyleSheet("font-weight: bold;")
+        for h, w in zip(COLUMN_HEADINGS, COLUMN_WIDTHS):
+            lbl = QLabel(f"<b>{h}</b>"); lbl.setMinimumWidth(w)
             header.addWidget(lbl)
-        layout.addLayout(header)
+        header.addStretch()
+        v.addLayout(header)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        layout.addWidget(scroll)
+        area = QScrollArea(); area.setWidgetResizable(True)
+        cont = QWidget(); area.setWidget(cont)
+        self.process_layout = QVBoxLayout(cont)
+        v.addWidget(area)
 
-        container = QWidget()
-        scroll.setWidget(container)
-        table_layout = QVBoxLayout(container)
+        controls = QHBoxLayout()
+        self.cb_active_only = QCheckBox("Write Active Only"); self.cb_active_only.setChecked(True)
+        btn_start = QPushButton("Start"); btn_start.clicked.connect(self.on_start)
+        btn_stop  = QPushButton("Stop");  btn_stop.clicked.connect(self.on_stop)
+        btn_scan  = QPushButton("Read from PLC"); btn_scan.clicked.connect(self.on_read_from_plc)
+        for w in (self.cb_active_only, btn_start, btn_stop, btn_scan):
+            controls.addWidget(w)
+        controls.addStretch()
+        v.addLayout(controls)
 
-        # Populate table with list of Process Variables
-        for pv in self.pv_list:
+    def _build_flowpaths_tab(self):
+        """Create the Flow Paths tab once; repopulate its inner layout."""
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+
+        # Header row
+        header = QHBoxLayout()
+        for title, width in (("Name", 200), ("Description", 300), ("Segments", 400)):
+            lbl = QLabel(f"<b>{title}</b>")
+            lbl.setMinimumWidth(width)
+            header.addWidget(lbl)
+        header.addStretch(1)
+        outer.addLayout(header)
+
+        # Scroll area with a container that can be rebuilt
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        cont = QWidget()
+        area.setWidget(cont)
+        self.flowpaths_layout = QVBoxLayout(cont)  # store for rebuilds
+        self.flowpaths_layout.setSpacing(6)
+        outer.addWidget(area)
+
+        # Bottom controls (optional: add "New Flow Path" button)
+        controls = QHBoxLayout()
+        btn_new = QPushButton("New Flow Path")
+        btn_new.clicked.connect(self._on_flowpath_new)
+        controls.addStretch(1)
+        controls.addWidget(btn_new)
+        outer.addLayout(controls)
+
+        # Keep a ref to the tab and add to the QTabWidget
+        self.tabs.addTab(tab, "Flow Paths")
+
+        # initial populate
+        self._refresh_flowpaths_tab()
+
+    # -------- Actions --------
+
+    def on_export_models_csv(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export Models to CSV", "models.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            models = self.get_configured_models()  # <- implement or use your existing accessor
+            export_models_csv(models, path, include_example_when_empty=True)
+            QMessageBox.information(self, "Export Models", f"Exported {len(models)} models to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Models Failed", str(e))
+
+    def on_import_models_csv(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import Models from CSV", "", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            imported = import_models_csv(path)
+            # Merge strategy: replace all or merge by name? Here we MERGE by 'name'
+            existing = {m.name: m for m in self.get_configured_models()}
+            for m in imported:
+                existing[m.name] = m
+            merged = list(existing.values())
+            self.set_configured_models(merged)  # <- persist + refresh UI as you already do
+            QMessageBox.information(self, "Import Models", f"Imported {len(imported)} models from:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Import Models Failed", str(e))
+
+    def on_export_flowpaths_csv(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export Flow Paths to CSV", "flowpaths.csv", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            flowpaths = self.get_flowpaths()  # <- implement accessor for your list
+            export_flowpaths_csv(flowpaths, path, include_example_when_empty=True)
+            QMessageBox.information(self, "Export Flow Paths", f"Exported {len(flowpaths)} flow paths to:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Flow Paths Failed", str(e))
+
+    def on_import_flowpaths_csv(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import Flow Paths from CSV", "", "CSV Files (*.csv)")
+        if not path:
+            return
+        try:
+            # If you have a FlowPath dataclass/ctor, pass it as flowpath_ctor=FlowPath
+            imported = import_flowpaths_csv(path, flowpath_ctor=None)
+            # Merge by 'name'
+            existing = {fp.name: fp for fp in self.get_flowpaths()}
+            for fp in imported:
+                key = fp.get("name") if isinstance(fp, dict) else getattr(fp, "name", None)
+                if key:
+                    existing[key] = fp
+            merged = list(existing.values())
+            self.set_flowpaths(merged)  # <- persist + refresh UI
+            QMessageBox.information(self, "Import Flow Paths", f"Imported {len(imported)} flow paths from:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Import Flow Paths Failed", str(e))
+
+    def on_configure_model(self):
+        # Very simple: open dialog for first PV (or you can build a selection)
+        pv = self.models[0] if self.models else ConfiguredModel(name="NewPV", type="Sensor", tag="", active=False)
+        dlg = ModelConfigWizard(self._plc, pv)
+        if dlg.exec():
+            # Expect dlg to save into pv_models.json
+            self.models = ModelLoader.load()
+            self._refresh_pv_tab()
+            self._rebuild()
+
+    def on_configure_flow_paths(self):
+        dlg = FlowPathConfigWizard(self._plc)
+        if dlg.exec():
+            pass  # no-op; dialog persists to its own json
+
+    def _on_flowpath_new(self):
+        from gui.dlg_flowpath_cfg import FlowPathConfigWizard  # adjust import to your path
+        dlg = FlowPathConfigWizard(self._plc, parent=self)
+        if dlg.exec():
+            # Wizard already saved to JSON; just refresh
+            self._refresh_flowpaths_tab()
+
+    def _on_flowpath_edit(self, fp: dict):
+        """Open wizard prefilled. Your wizard supports presets (if not, you can load/edit and resave here)."""
+        try:
+            from gui.dlg_flowpath_cfg import FlowPathConfigWizard
+        except Exception:
+            # fallback to the path you’re using
+            from dlg_flowpath_cfg import FlowPathConfigWizard
+
+        dlg = FlowPathConfigWizard(
+            self._plc,
+            parent=self,
+            preset_name=fp.get("name"),
+            preset_description=fp.get("description", ""),
+            preset_segments=fp.get("segments", []),
+        )
+        if dlg.exec():
+            self._refresh_flowpaths_tab()
+
+    def _on_flowpath_remove(self, name: str):
+        if not name:
+            return
+        rows = [fp for fp in self.get_flowpaths() if fp.get("name") != name]
+        self.set_flowpaths(rows)  # persists and refreshes
+        QMessageBox.information(self, "Flow Path Removed", f"Removed flow path: {name}")
+
+    def on_start(self):
+        try:
+            if not (self._plc and self._plc.is_connected()):
+                QMessageBox.warning(self, "PLC Not Connected", "Please connect to a PLC first.")
+                return
+        except Exception:
+            pass
+        self._rebuild()
+        self.timer.start()
+
+    def on_stop(self):
+        self.timer.stop()
+        self.bridge.stop()
+
+    def on_read_from_plc(self):
+        # Placeholder
+        QMessageBox.information(self, "Read from PLC", "Discovery not wired yet in this window. (Optional)")
+
+    # -------- Sim orchestration --------
+
+    def _rebuild(self):
+        self.components.clear()
+        self.active_only.clear()
+        self.bridge.stop()
+
+        # build components
+        for cm in self.models:
+            comp = build_sim_component(cm)
+            self.components[cm.name] = comp
+            if cm.active and cm.tag:
+                self.bridge.register_source(cm.tag, comp.current_value)
+                self.active_only[cm.name] = comp
+        self.bridge.start()
+
+        # dynamic wiring (pressure/level pulling from flows)
+        self._pressure_links = {}
+        self._level_links = {}
+        for cm in self.models:
+            if cm.type.lower() == "pressure":
+                self._pressure_links[cm.name] = (cm.inputs.get("inlet_flow"), cm.inputs.get("outlet_flow"))
+            elif cm.type.lower() == "level":
+                self._level_links[cm.name] = (cm.inputs.get("inlet_flow"), cm.inputs.get("outlet_flow"))
+
+    def _tick(self):
+        dt = 0.2
+        # Wire flows each tick and update
+        for name, comp in self.components.items():
+            if isinstance(comp, PressureComponent):
+                inlet, outlet = self._pressure_links.get(name, (None, None))
+                qin = self.components[inlet].current_value() if inlet in self.components else 0.0
+                qout = self.components[outlet].current_value() if outlet in self.components else 0.0
+                comp.set_flows(qin, qout)
+            elif isinstance(comp, LevelComponent):
+                inlet, outlet = self._level_links.get(name, (None, None))
+                qin = self.components[inlet].current_value() if inlet in self.components else 0.0
+                qout = self.components[outlet].current_value() if outlet in self.components else 0.0
+                comp.set_flows(qin, qout)
+
+        for comp in self.components.values():
+            comp.update(dt)
+
+        self.bridge.tick()
+        self._refresh_values()
+
+    # -------- UI helpers --------
+
+    def get_configured_models(self) -> list[ConfiguredModel]:
+        return list(self.models)
+
+    def set_configured_models(self, models: list[ConfiguredModel]) -> None:
+        # Persist and refresh
+        self.models = list(models)
+        ModelLoader.save(self.models)
+        # Make sure your UI rebuilds the list and the components
+        self._refresh_pv_tab()
+        self._rebuild()
+
+    def get_flowpaths(self) -> list[dict]:
+        """
+        Returns a list of dicts: {"name": str, "description": str, "segments": [str]}
+        """
+        try:
+            with open("./assets/flowpaths.json", "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+        except (FileNotFoundError, JSONDecodeError):
+            data = {}
+
+        out = []
+        for name, entry in data.items():
+            out.append({
+                "name": name,
+                "description": entry.get("description", ""),
+                "segments": list(entry.get("segments", [])),  # names only
+            })
+        return out
+
+    def set_flowpaths(self, items: list[dict]) -> None:
+        """
+        Accepts a list of dicts in the same shape and writes flowpaths.json.
+        """
+        data = {}
+        for fp in items:
+            name = (fp.get("name") or "").strip()
+            if not name:
+                continue
+            data[name] = {
+                "description": fp.get("description", ""),
+                "segments": list(fp.get("segments", [])),
+            }
+
+        Path("./assets").mkdir(parents=True, exist_ok=True)
+        with open("./assets/flowpaths.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        self._refresh_pv_tab()
+
+    def _refresh_pv_tab(self):
+        # rebuild process list
+        layout = self.process_layout
+        # clear
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w: w.deleteLater()
+
+        self.value_labels.clear()
+        for cm in self.models:
             row = QHBoxLayout()
-            name = QLabel(pv.name)
-            name.setFixedWidth(COLUMN_WIDTHS[0])
-            chk = QCheckBox()
-            chk.setChecked(pv.active if hasattr(pv, "active") else False)
-            chk.stateChanged.connect(lambda _, pv=pv: pv.toggle_active()) # type: ignore
-            chk.setFixedWidth(COLUMN_WIDTHS[1])
+            row.addWidget(QLabel(cm.name))
+            row.addWidget(QLabel(cm.type))
+            row.addWidget(QLabel(cm.tag))
+            row.addWidget(QLabel("Yes" if cm.active else "No"))
+            val_lbl = QLabel("—")
+            self.value_labels[cm.name] = val_lbl
+            row.addWidget(val_lbl)
+            row.addStretch()
+            line = QFrame(); line.setFrameShape(QFrame.Shape.HLine); line.setFrameShadow(QFrame.Shadow.Sunken)
+            wrap = QVBoxLayout(); wrap.addLayout(row); wrap.addWidget(line)
+            cont = QWidget(); cont.setLayout(wrap)
+            self.process_layout.addWidget(cont)
 
-            dtype = QLabel(pv.model or "")
-            dtype.setFixedWidth(COLUMN_WIDTHS[2])
+        self.process_layout.addStretch()
 
-            value = QLabel(f"{pv.value}")
-            value.setFixedWidth(COLUMN_WIDTHS[3])
+    def _refresh_flowpaths_tab(self):
+        """Rebuild the rows from JSON."""
+        if not hasattr(self, "flowpaths_layout"):
+            return  # tab not built yet
 
-            btn = QPushButton("Configure Model")
-            btn.clicked.connect(partial(self.open_model_config, pv)) # type: ignore
-            btn.setFixedWidth(COLUMN_WIDTHS[4])
+        # clear previous rows
+        layout = self.flowpaths_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
 
-            for widget in (name, chk, dtype, value, btn):
-                row.addWidget(widget)
-            table_layout.addLayout(row)
+        # build rows
+        rows = self.get_flowpaths()
+        if not rows:
+            empty = QLabel("No flow paths configured yet.")
+            empty.setStyleSheet("color:#888;")
+            layout.addWidget(empty)
+            return
 
-        tab.setLayout(layout)
-        return tab
+        for fp in rows:
+            layout.addWidget(self._build_flowpath_row(fp))
 
-    def _build_flow_paths_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("Flow Paths UI goes here."))
-        tab.setLayout(layout)
-        return tab
+    def _refresh_values(self):
+        for name, lbl in self.value_labels.items():
+            comp = self.components.get(name)
+            if comp:
+                try:
+                    v = comp.current_value()
+                    lbl.setText(f"{v:.3f}")
+                except Exception:
+                    lbl.setText("ERR")
 
-    def _build_equipment_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("Equipment UI goes here."))
-        tab.setLayout(layout)
-        return tab
+    def _build_flowpath_row(self, fp: dict) -> QWidget:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
 
-    def open_model_config(self, pv):
-        # Opens the model configuration wizard dialog
-        dlg = ModelConfigWizard(self.plc, pv)
-        dlg.exec()
+        # Name as a button to open editor
+        btn_name = QPushButton(fp.get("name", ""))
+        btn_name.setFlat(True)
+        btn_name.setStyleSheet("text-align:left;")
+        btn_name.clicked.connect(lambda: self._on_flowpath_edit(fp))
+        btn_name.setMinimumWidth(200)
 
-    def show_plc_connection_dialog(self):
-        from gui.dlg_plc_conn_cfg import PLCConnectionDialog  # if it's in a separate file
+        # Description
+        desc = QLabel(fp.get("description", ""))
+        desc.setWordWrap(True)
+        desc.setMinimumWidth(300)
 
-        dialog = PLCConnectionDialog(self)
-        if dialog.exec() == QDialog.accepted:
-            self.plc_connection = dialog.plc_connection
-            print("PLC connected!")
-            # Optionally: fetch tags or update UI
-        else:
-            print("PLC connection cancelled.")
+        # Segments: join names
+        segs = fp.get("segments", [])
+        seg_label = QLabel(", ".join(segs))
+        seg_label.setWordWrap(True)
+        seg_label.setMinimumWidth(400)
+
+        # Remove button
+        btn_remove = QPushButton("Remove")
+        btn_remove.clicked.connect(lambda: self._on_flowpath_remove(fp.get("name", "")))
+
+        row_layout.addWidget(btn_name, 0)
+        row_layout.addWidget(desc,    1)
+        row_layout.addWidget(seg_label, 2)
+        row_layout.addStretch(1)
+        row_layout.addWidget(btn_remove, 0)
+
+        # separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+
+        wrapper = QWidget()
+        v = QVBoxLayout(wrapper)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        v.addWidget(row)
+        v.addWidget(sep)
+
+        return wrapper
