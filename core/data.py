@@ -1,5 +1,10 @@
-from dataclasses import dataclass, field
-from typing import List
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from typing import Any, Iterable, Mapping
+
+from domain.models import FlowPath, PlantPaxModule
+
 
 @dataclass
 class Pump:
@@ -7,7 +12,8 @@ class Pump:
     plc_tag: str
     max_flow: float
     control_variable: str
-    fidelity: str = "Simple"  # Optional, for simulation mode
+    fidelity: str = "Simple"
+
 
 @dataclass
 class ControlValve:
@@ -16,6 +22,7 @@ class ControlValve:
     cv: float
     open_pct: float = 100.0
     fidelity: str = "Simple"
+
 
 @dataclass
 class ControlVariable:
@@ -26,13 +33,11 @@ class ControlVariable:
     EUMax: float = 100.0
     value: float = 0.0
 
-    def serialize_cv(self):
-        return {
-            "name": self.name,
-            "EU Min": self.EUMin,
-            "EU Max": self.EUMax,
-            "gain": self.gain,
-        }
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    serialize_cv = to_dict
+
 
 @dataclass
 class Valve:
@@ -41,17 +46,19 @@ class Valve:
     tag: str = ""
     is_open: bool = False
 
-@dataclass
-class FlowPath:
-    name: str = ""
-    description: str = ""
-    segments: List[Valve] = field(default_factory=list)
+    @classmethod
+    def from_value(cls, value: str | Mapping[str, Any] | "Valve") -> "Valve":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            return cls(plc_tag=value, name=value, tag=value)
+        return cls(
+            plc_tag=str(value.get("plc_tag") or value.get("tag") or value.get("name") or ""),
+            name=str(value.get("name") or value.get("tag") or value.get("plc_tag") or ""),
+            tag=str(value.get("tag") or value.get("plc_tag") or ""),
+            is_open=bool(value.get("is_open", False)),
+        )
 
-    def serialize_fp(self):
-        return {
-            "description": self.description,
-            "segments": [v.name for v in self.segments]
-        }
 
 @dataclass
 class AnalogSensor:
@@ -66,38 +73,41 @@ class AnalogSensor:
     model_type: str = ""
     model_configured: bool = False
     active: bool = False
-    cv: List[ControlVariable] = field(default_factory=list)
-    cv_relationship: List[str] = field(default_factory=list)
+    cv: list[ControlVariable] = field(default_factory=list)
+    cv_relationship: list[str] = field(default_factory=list)
 
-    def toggle_active(self):
+    def toggle_active(self) -> None:
         self.active = not self.active
 
-    def serialize_pv(self):
+    def to_dict(self) -> dict[str, Any]:
         return {
-            "name": self.name,
-            "value": self.value,
-            "model_type": self.model_type,
-            "cv": [vars(cv) for cv in self.cv]
+            **asdict(self),
+            "cv": [item.to_dict() for item in self.cv],
         }
 
-class PLCData:
-    def __init__(self):
-        self.pax_modules_list = [] # All PlantPAx modules found in tag export
-        self.pv_list = [] # List of process variables in the PLC (type: ProcessVariable)
-        self.cv_list = [] # List of CV Names (strings)
-        self.valve_list = []
-        self.flow_paths = []
-        # module_dict is a dictionary whose keys are the PlantPAx module types
-        # and whose values are lists of PlantPAx modules (represented as dictionaries) with that data type
-        self.module_dict = {}
+    serialize_pv = to_dict
 
-    def print_tags(self):
+
+
+
+class PLCData:
+    """In-memory discovery view; persistence is owned by ProjectStore."""
+
+    def __init__(self) -> None:
+        self.pax_modules_list: list[PlantPaxModule] = []
+        self.pv_list: list[Any] = []
+        self.cv_list: list[str] = []
+        self.valve_list: list[str] = []
+        self.flow_paths: list[FlowPath] = []
+        self.module_dict: dict[str, list[PlantPaxModule]] = {}
+
+    def replace_modules(self, modules: Iterable[PlantPaxModule]) -> None:
+        self.pax_modules_list = list(modules)
+        grouped: dict[str, list[PlantPaxModule]] = {}
+        for module in self.pax_modules_list:
+            grouped.setdefault(module.module_type, []).append(module)
+        self.module_dict = grouped
+
+    def print_tags(self) -> None:
         for pv in self.pv_list:
             print(pv.name)
-
-@dataclass
-class PlantPaxModule:
-    name: str
-    data_type: str
-    path: str
-    module_type: str  # e.g., 'Pump', 'ControlValve', 'AnalogInput', 'DiscreteValve'

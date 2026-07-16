@@ -1,189 +1,156 @@
-import os
-from json import JSONDecodeError
-from PyQt6 import QtWidgets
-from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QMessageBox, QComboBox, QHBoxLayout, QToolButton, QPushButton, QLabel, QVBoxLayout, \
-    QLineEdit
+from __future__ import annotations
 
-from core.data import FlowPath, Valve
-import json
+from PyQt6 import QtWidgets
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QToolButton,
+    QVBoxLayout,
+)
+
+from persistence.project_store import ProjectStore
+from domain.models import FlowPath
+
 
 class FlowPathConfigWizard(QtWidgets.QDialog):
-    flow_path_saved = pyqtSignal(str)  # Emit the new flow path name
-
-    def __init__(self, plc, parent=None, preset_name: str | None = None, preset_description: str | None = None,
-                 preset_segments: list[str] | None = None):
+    def __init__(
+        self,
+        plc=None,
+        parent=None,
+        flowpath: FlowPath | None = None,
+        store: ProjectStore | None = None,
+    ) -> None:
         super().__init__(parent)
         self.plc = plc
+        if store is None:
+            raise ValueError("FlowPathConfigWizard requires a ProjectStore")
+        self.store = store
+        self.original_name = flowpath.name if flowpath else None
         self.setWindowTitle("Flow Path Configuration")
+        self.setMinimumWidth(620)
+
         root = QVBoxLayout(self)
 
-        # --- name / description controls (use your existing ones if you already had them) ---
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("Name:"))
-        self.name_edit = QLineEdit(preset_name or "")
+        self.name_edit = QLineEdit(flowpath.name if flowpath else "")
         name_row.addWidget(self.name_edit, 1)
         root.addLayout(name_row)
 
         desc_row = QHBoxLayout()
         desc_row.addWidget(QLabel("Description:"))
-        self.desc_edit = QLineEdit(preset_description or "")
+        self.desc_edit = QLineEdit(flowpath.description if flowpath else "")
         desc_row.addWidget(self.desc_edit, 1)
         root.addLayout(desc_row)
 
-        # --- segments area (replaces your listbox) ---
         root.addWidget(QLabel("Segments (valves):"))
+        segment_container = QtWidgets.QWidget()
+        self.segment_layout = QVBoxLayout(segment_container)
+        self.segment_layout.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(segment_container)
 
-        seg_container = QtWidgets.QWidget()
-        self.seg_layout = QVBoxLayout(seg_container)
-        self.seg_layout.setContentsMargins(0, 0, 0, 0)
-        self.seg_layout.setSpacing(6)
-        root.addWidget(seg_container)
-
-        # add row button
         add_row = QHBoxLayout()
-        self.btn_add_seg = QPushButton("+ Add segment")
-        self.btn_add_seg.clicked.connect(lambda: self._add_segment_row())
+        add_button = QPushButton("+ Add segment")
+        add_button.clicked.connect(self._on_add_segment_clicked)
         add_row.addStretch(1)
-        add_row.addWidget(self.btn_add_seg)
+        add_row.addWidget(add_button)
         root.addLayout(add_row)
 
-        # offline banner if needed
-        if not getattr(self.plc, "is_connected", False):
-            offline = QLabel("Offline mode: type valve names manually or pick from any cached suggestions.")
-            offline.setStyleSheet("color:#888; font-style: italic;")
+        if not self._plc_connected():
+            offline = QLabel("Offline mode: valve names can be entered manually.")
+            offline.setStyleSheet("color:#888; font-style:italic;")
             root.addWidget(offline)
 
-        # action buttons
         actions = QHBoxLayout()
-        self.btn_save = QPushButton("Save")
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_save.clicked.connect(self._on_save)
-        self.btn_cancel.clicked.connect(self.reject)
+        save_button = QPushButton("Save")
+        cancel_button = QPushButton("Cancel")
+        save_button.clicked.connect(self._save)
+        cancel_button.clicked.connect(self.reject)
         actions.addStretch(1)
-        actions.addWidget(self.btn_save)
-        actions.addWidget(self.btn_cancel)
+        actions.addWidget(save_button)
+        actions.addWidget(cancel_button)
         root.addLayout(actions)
 
-        # initialize rows
-        if preset_segments:
-            for s in preset_segments:
-                self._add_segment_row(preset=s)
-        else:
-            self._add_segment_row()  # start with one empty row
+        segments = flowpath.segments if flowpath else []
+        for segment in segments or [""]:
+            self._add_segment_row(segment)
+
+    def _plc_connected(self) -> bool:
+        checker = getattr(self.plc, "is_connected", None)
+        return bool(checker()) if callable(checker) else False
 
     def _known_valves(self) -> list[str]:
-        """Collect suggestions from PLC (if online) plus any cached names from existing flowpaths.json."""
-        names = list(getattr(self.plc, "valve_list", []) or [])
+        names: list[str] = []
+        names.extend(str(item) for item in (getattr(self.plc, "valve_list", []) or []))
+        for flowpath in self.store.get_flow_paths():
+            names.extend(flowpath.segments)
+        return sorted({name.strip() for name in names if name.strip()}, key=str.casefold)
 
-        # augment with names seen in saved flowpaths (optional but helpful offline)
-        try:
-            with open("./assets/flowpaths.json", "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
-            for fp in data.values():
-                for seg in fp.get("segments", []):
-                    if isinstance(seg, str):
-                        names.append(seg)
-                    else:
-                        nm = seg.get("name") if isinstance(seg, dict) else getattr(seg, "name", None)
-                        if nm:
-                            names.append(nm)
-        except Exception:
-            pass
+    def _on_add_segment_clicked(self, checked: bool = False) -> None:
+        del checked
+        self._add_segment_row()
 
-        # unique + sorted
-        names = [n for n in names if n]
-        return sorted(set(names), key=str.lower)
+    def _add_segment_row(self, preset: str = "") -> None:
+        preset_text = preset if isinstance(preset, str) else ""
 
-    def _add_segment_row(self, preset: str | None = None):
         row = QHBoxLayout()
-
         combo = QComboBox()
         combo.setEditable(True)
+        combo.addItems(self._known_valves())
+        combo.setCurrentText(preset_text)
+        combo.setPlaceholderText("Type a valve name")
 
-        vals = self._known_valves()
-        if vals:
-            combo.addItems(vals)
-        else:
-            combo.setPlaceholderText("Type a valve name")
-
-        if preset:
-            combo.setCurrentText(preset)
-
-        btn_remove = QToolButton()
-        btn_remove.setText("–")
-        btn_remove.setAutoRaise(True)
-        btn_remove.clicked.connect(lambda: self._remove_segment_row(row))
+        remove_button = QToolButton()
+        remove_button.setText("–")
+        remove_button.clicked.connect(
+            lambda checked=False, target=row: self._remove_segment_row(target)
+        )
 
         row.addWidget(combo, 1)
-        row.addWidget(btn_remove, 0)
+        row.addWidget(remove_button)
+        row.segment_combo = combo  # type: ignore[attr-defined]
+        self.segment_layout.addLayout(row)
 
-        # stash a reference so we can find the combo later
-        row._seg_combo = combo  # type: ignore[attr-defined]
-
-        self.seg_layout.addLayout(row)
-
-    def _remove_segment_row(self, row_layout: QHBoxLayout):
-        # keep at least one row
-        if self.seg_layout.count() <= 1:
-            # clear the one combo instead
-            for i in range(row_layout.count()):
-                w = row_layout.itemAt(i).widget()
-                if isinstance(w, QComboBox):
-                    w.setCurrentText("")
+    def _remove_segment_row(self, row: QHBoxLayout) -> None:
+        if self.segment_layout.count() == 1:
+            row.segment_combo.setCurrentText("")  # type: ignore[attr-defined]
             return
+        while row.count():
+            widget = row.takeAt(0).widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.segment_layout.removeItem(row)
 
-        while row_layout.count():
-            item = row_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        self.seg_layout.removeItem(row_layout)
+    def _segments(self) -> list[str]:
+        result: list[str] = []
+        for index in range(self.segment_layout.count()):
+            row = self.segment_layout.itemAt(index).layout()
+            combo = getattr(row, "segment_combo", None)
+            if combo is not None:
+                value = combo.currentText().strip()
+                if value:
+                    result.append(value)
+        return result
 
-    def _collect_segments(self) -> list[str]:
-        segs: list[str] = []
-        for i in range(self.seg_layout.count()):
-            item = self.seg_layout.itemAt(i)
-            row = item.layout()
-            if not isinstance(row, QHBoxLayout):
-                continue
-            # stored combo on the row for easy access
-            combo = getattr(row, "_seg_combo", None)
-            if isinstance(combo, QComboBox):
-                name = combo.currentText().strip()
-                if name:
-                    segs.append(name)
-        return segs
-
-    def _on_save(self):
+    def _save(self) -> None:
         name = self.name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, "Missing name", "Please enter a Flow Path name.")
+            QMessageBox.warning(self, "Missing name", "Enter a flow path name.")
             return
 
-        segs = self._collect_segments()
-        if not segs:
-            QMessageBox.warning(self, "No segments", "Add at least one valve segment (or type a name).")
+        segments = self._segments()
+        if not segments:
+            QMessageBox.warning(self, "No segments", "Add at least one valve segment.")
             return
 
-        desc = self.desc_edit.text().strip()
-
-        # Persist using wizard’s JSON schema:
-        #   ./assets/flowpaths.json -> { "<name>": {"description": "...", "segments": ["V1","V2",...]} }
-        os.makedirs("./assets", exist_ok=True)
-        try:
-            try:
-                with open("./assets/flowpaths.json", "r", encoding="utf-8") as f:
-                    data = json.load(f) or {}
-            except FileNotFoundError:
-                data = {}
-
-            data[name] = {"description": desc, "segments": segs}
-
-            with open("./assets/flowpaths.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            QMessageBox.critical(self, "Save failed", str(e))
-            return
-
+        flowpath = FlowPath(
+            name=name,
+            description=self.desc_edit.text().strip(),
+            segments=segments,
+        )
+        self.store.upsert_flow_path(flowpath, previous_name=self.original_name)
         self.accept()

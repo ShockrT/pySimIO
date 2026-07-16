@@ -7,7 +7,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Iterable, List, Dict, Any, re
 
-from core.models import ConfiguredModel
+from domain.models import ConfiguredModel
 
 # ---- CSV SCHEMAS ----
 # We include a superset of columns so the template is stable and re-usable across types.
@@ -15,7 +15,7 @@ MODEL_FIELDNAMES = [
     # core
     "name", "type", "tag", "active", "fidelity",
     # inputs (linkages)
-    "inputs.inlet_flow", "inputs.outlet_flow", "inputs.control",
+    "inputs.inlet_flow", "inputs.outlet_flow", "inputs.control", "inputs.flow_path",
     # common params
     "params.initial", "params.tau", "params.k",
     # pressure-specific
@@ -49,6 +49,7 @@ def export_models_csv(models: Iterable[ConfiguredModel], path: str | Path, inclu
                 "active": "True",
                 "fidelity": "0",
                 "inputs.control": "PUMP-01",
+                "inputs.flow_path": "FP-001",
                 "params.initial": "0",
                 "params.tau": "1.5",
                 "params.k": "1.0",
@@ -83,6 +84,7 @@ def _model_to_rows(models: Iterable[ConfiguredModel]) -> Iterable[Dict[str, str]
         row["inputs.inlet_flow"]  = m.inputs.get("inlet_flow", "")
         row["inputs.outlet_flow"] = m.inputs.get("outlet_flow", "")
         row["inputs.control"]     = m.inputs.get("control", "")
+        row["inputs.flow_path"]   = m.inputs.get("flow_path", "")
 
         # Params (write all known keys if present; leave others blank)
         p = m.params or {}
@@ -103,7 +105,7 @@ def _row_to_model(row: Dict[str, str]) -> ConfiguredModel:
 
     # Inputs
     inputs = {}
-    for k in ("inlet_flow", "outlet_flow", "control"):
+    for k in ("inlet_flow", "outlet_flow", "control", "flow_path"):
         v = (row.get(f"inputs.{k}") or "").strip()
         if v:
             inputs[k] = v
